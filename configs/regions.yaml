@@ -1,0 +1,9 @@
+regions:
+  - id: "us_ca_sf_bay"
+    country: "US"
+    state_codes: ["06"]
+    name: "San Francisco Bay Area"
+  - id: "us_ny_metro"
+    country: "US"
+    state_codes: ["34", "36"]
+    name: "New York Metro"

@@ -1,0 +1,7 @@
+apache-airflow-providers-postgres
+apache-airflow-providers-amazon
+requests
+psycopg2-binary
+minio
+python-dateutil
+PyYAML

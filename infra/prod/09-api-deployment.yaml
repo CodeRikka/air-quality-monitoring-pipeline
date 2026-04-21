@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aq-api
+  namespace: serving
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: aq-api
+  template:
+    metadata:
+      labels:
+        app: aq-api
+    spec:
+      containers:
+        - name: aq-api
+          image: ghcr.io/coderikka/aq-api:latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "384Mi"
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_HOST
+              value: postgres-rw.storage.svc.cluster.local
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_DB_AIRQUALITY
+              value: airquality
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: air-quality-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: air-quality-secrets
+                  key: POSTGRES_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aq-api
+  namespace: serving
+spec:
+  selector:
+    app: aq-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

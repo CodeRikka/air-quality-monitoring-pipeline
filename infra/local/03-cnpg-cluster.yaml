@@ -1,0 +1,21 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+  namespace: storage
+spec:
+  instances: 1
+  storage:
+    size: 20Gi
+    storageClass: microk8s-hostpath
+  superuserSecret:
+    name: postgres-superuser-secret
+  bootstrap:
+    initdb:
+      database: airquality
+      owner: admin
+      secret:
+        name: postgres-app-secret
+      postInitSQL:
+        - CREATE DATABASE airflow OWNER admin;
+  enableSuperuserAccess: true

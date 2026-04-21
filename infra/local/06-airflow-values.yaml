@@ -1,0 +1,133 @@
+executor: KubernetesExecutor
+
+images:
+  airflow:
+    repository: apache/airflow
+    tag: "3.1.8"
+
+postgresql:
+  enabled: false
+
+apiSecretKey: "admin-airflow-api-secret-key"
+
+apiServer:
+  replicas: 1
+  service:
+    type: NodePort
+
+createUserJob:
+  defaultUser:
+    enabled: true
+    role: Admin
+    username: admin
+    email: admin@example.com
+    firstName: admin
+    lastName: user
+    password: admin
+
+data:
+  metadataConnection:
+    user: postgres
+    pass: admin
+    protocol: postgresql
+    host: postgres-rw.storage.svc.cluster.local
+    port: 5432
+    db: airflow
+    sslmode: disable
+
+config:
+  core:
+    load_examples: "False"
+  kubernetes_executor:
+    delete_worker_pods: "False"
+    delete_worker_pods_on_failure: "False"
+
+dags:
+  gitSync:
+    enabled: true
+    repo: https://github.com/CodeRikka/air-quality-monitoring-pipeline.git
+    branch: main
+    rev: HEAD
+    ref: main
+    depth: 1
+    subPath: airflow
+    wait: 60
+    recommendedProbeSetting: true
+
+env:
+  - name: POSTGRES_HOST
+    value: postgres-rw.storage.svc.cluster.local
+  - name: POSTGRES_PORT
+    value: "5432"
+  - name: POSTGRES_DB_AIRQUALITY
+    value: airquality
+  - name: MINIO_ENDPOINT
+    value: minio.storage.svc.cluster.local:9000
+
+secret:
+  - envName: EPA_AQS_EMAIL
+    secretName: air-quality-secrets
+    secretKey: EPA_AQS_EMAIL
+  - envName: EPA_AQS_KEY
+    secretName: air-quality-secrets
+    secretKey: EPA_AQS_KEY
+  - envName: AQS_REQUEST_TIMEOUT_SECONDS
+    secretName: air-quality-secrets
+    secretKey: AQS_REQUEST_TIMEOUT_SECONDS
+  - envName: AQS_MIN_REQUEST_INTERVAL_SECONDS
+    secretName: air-quality-secrets
+    secretKey: AQS_MIN_REQUEST_INTERVAL_SECONDS
+  - envName: AQS_MAX_RETRIES
+    secretName: air-quality-secrets
+    secretKey: AQS_MAX_RETRIES
+  - envName: AQS_RETRY_BACKOFF_FACTOR
+    secretName: air-quality-secrets
+    secretKey: AQS_RETRY_BACKOFF_FACTOR
+  - envName: AQS_GEOGRAPHY_MODE
+    secretName: air-quality-secrets
+    secretKey: AQS_GEOGRAPHY_MODE
+  - envName: AQS_STATE_TO_COUNTY_SCORE_THRESHOLD
+    secretName: air-quality-secrets
+    secretKey: AQS_STATE_TO_COUNTY_SCORE_THRESHOLD
+  - envName: AQS_BOOTSTRAP_START_YEAR
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_START_YEAR
+  - envName: AQS_BOOTSTRAP_REGION_IDS
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_REGION_IDS
+  - envName: AQS_BOOTSTRAP_PARAMETERS
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_PARAMETERS
+  - envName: AQS_SHARD_PARAMS_PER_REQUEST
+    secretName: air-quality-secrets
+    secretKey: AQS_SHARD_PARAMS_PER_REQUEST
+  - envName: AQS_BOOTSTRAP_BDATE
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_BDATE
+  - envName: AQS_BOOTSTRAP_EDATE
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_EDATE
+  - envName: AQS_BOOTSTRAP_WINDOW_GRANULARITY
+    secretName: air-quality-secrets
+    secretKey: AQS_BOOTSTRAP_WINDOW_GRANULARITY
+  - envName: AQS_RECONCILE_CBDATE
+    secretName: air-quality-secrets
+    secretKey: AQS_RECONCILE_CBDATE
+  - envName: AQS_RECONCILE_CEDATE
+    secretName: air-quality-secrets
+    secretKey: AQS_RECONCILE_CEDATE
+  - envName: AIRNOW_API_KEY
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_API_KEY
+  - envName: POSTGRES_USER
+    secretName: air-quality-secrets
+    secretKey: POSTGRES_USER
+  - envName: POSTGRES_PASSWORD
+    secretName: air-quality-secrets
+    secretKey: POSTGRES_PASSWORD
+  - envName: MINIO_ROOT_USER
+    secretName: air-quality-secrets
+    secretKey: MINIO_ROOT_USER
+  - envName: MINIO_ROOT_PASSWORD
+    secretName: air-quality-secrets
+    secretKey: MINIO_ROOT_PASSWORD

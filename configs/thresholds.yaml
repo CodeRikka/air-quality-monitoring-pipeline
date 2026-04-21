@@ -1,0 +1,13 @@
+thresholds:
+  - pollutant_code: "44201"
+    threshold_type: "ozone_8h_standard"
+    threshold_value: 0.070
+    unit: "ppm"
+  - pollutant_code: "88101"
+    threshold_type: "pm25_24h_standard"
+    threshold_value: 35.0
+    unit: "ug/m3"
+  - pollutant_code: "81102"
+    threshold_type: "pm10_24h_standard"
+    threshold_value: 150.0
+    unit: "ug/m3"

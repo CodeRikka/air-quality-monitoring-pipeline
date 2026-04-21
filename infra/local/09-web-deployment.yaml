@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aq-web
+  namespace: serving
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aq-web
+  template:
+    metadata:
+      labels:
+        app: aq-web
+    spec:
+      containers:
+        - name: aq-web
+          image: ghcr.io/coderikka/aq-web:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8501
+          env:
+            - name: AQ_API_BASE_URL
+              value: http://aq-api.serving.svc.cluster.local:8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aq-web
+  namespace: serving
+spec:
+  selector:
+    app: aq-web
+  ports:
+    - name: http
+      port: 8501
+      targetPort: 8501
