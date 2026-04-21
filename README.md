@@ -424,9 +424,26 @@ On the primary node:
 
 1. copy `.env.example` to `.env`
 2. set real secrets and credentials
-3. ensure the serving images exist in your registry
+3. confirm that the serving images referenced by the production manifests already exist in a registry your Raspberry Pi cluster can pull from
 
-To build and publish multi-arch images:
+The production manifests currently reference:
+
+- `ghcr.io/coderikka/aq-api:latest`
+- `ghcr.io/coderikka/aq-web:latest`
+
+Because the production manifests use registry pulls rather than local image import, the cluster can only start `aq-api` and `aq-web` if those images already exist remotely and are reachable from the nodes.
+
+This is the intended decision flow:
+
+1. If you want to deploy the exact image tags already referenced in `infra/prod/09-api-deployment.yaml` and `infra/prod/10-web-deployment.yaml`, and those images already exist in the remote registry, you do not need to build anything first.
+2. If you changed the `api/` or `web/` code and want the cluster to run your current version, you must build and push new images before deployment.
+3. If you want to use a different registry, repository, or tag, update the production manifests first, then make sure those new image references have been pushed.
+
+In other words, `scripts/31-build-multiarch.sh` is not an unconditional prerequisite. It is only required when the registry does not already contain the exact images you plan to deploy.
+
+If your Raspberry Pi nodes are already connected to the internet, that usually means the remaining requirement is simply that the images exist and are public or otherwise pullable by the cluster.
+
+To build and publish multi-arch images when needed:
 
 ```bash
 bash scripts/31-build-multiarch.sh
@@ -468,6 +485,20 @@ The production deploy script performs:
 10. Airflow connection setup
 11. API and dashboard deployment
 12. post-deploy health checks
+
+### 5. Production Deployment Checklist
+
+Use this checklist if you want the shortest possible confirmation before running the cluster deploy:
+
+1. every Raspberry Pi node has completed `bash infra/prod/00-bootstrap-microk8s.sh`
+2. the 3-node MicroK8s cluster has been formed successfully
+3. `rook-ceph` is healthy enough to provide the `rook-ceph-block` storage class
+4. `.env` exists on the primary node and contains real credentials
+5. the image references in `infra/prod/09-api-deployment.yaml` and `infra/prod/10-web-deployment.yaml` already exist in a reachable registry
+6. only if step 5 is false, run `bash scripts/31-build-multiarch.sh`
+7. run `bash scripts/11-deploy-prod.sh`
+
+If you are unsure whether step 5 is already satisfied, treat `31-build-multiarch.sh` as the "publish images first" step, not as a mandatory bootstrap step for every deployment.
 
 ## Environment Variables and Secrets
 
