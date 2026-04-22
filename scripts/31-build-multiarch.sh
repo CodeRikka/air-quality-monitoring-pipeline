@@ -4,7 +4,13 @@ set -euo pipefail
 REGISTRY="${1:-ghcr.io/coderikka}"
 TAG="${2:-latest}"
 
-docker buildx create --use --name aq-builder || true
+if docker buildx inspect aq-builder >/dev/null 2>&1; then
+  docker buildx use aq-builder
+else
+  docker buildx create --name aq-builder --use
+fi
+
+docker buildx inspect --bootstrap >/dev/null
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
