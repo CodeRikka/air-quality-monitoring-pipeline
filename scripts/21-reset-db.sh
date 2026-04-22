@@ -10,6 +10,8 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+KUBECTL_BACKEND_TLS_FLAG="${KUBECTL_BACKEND_TLS_FLAG:---insecure-skip-tls-verify-backend=true}"
+
 require_var() {
   local name="$1"
   if [[ -z "${!name:-}" ]]; then
@@ -93,11 +95,11 @@ EOF
 
 if ! microk8s kubectl wait --for=condition=complete job/"${POSTGRES_RESET_JOB}" -n "${STORAGE_NAMESPACE}" --timeout=180s; then
   echo "Error: ${POSTGRES_RESET_JOB} failed. Dumping job logs:" >&2
-  microk8s kubectl logs -n "${STORAGE_NAMESPACE}" job/"${POSTGRES_RESET_JOB}" --tail=200 || true
+  microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${STORAGE_NAMESPACE}" job/"${POSTGRES_RESET_JOB}" --tail=200 || true
   microk8s kubectl describe job -n "${STORAGE_NAMESPACE}" "${POSTGRES_RESET_JOB}" || true
   exit 1
 fi
-microk8s kubectl logs -n "${STORAGE_NAMESPACE}" job/"${POSTGRES_RESET_JOB}"
+microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${STORAGE_NAMESPACE}" job/"${POSTGRES_RESET_JOB}" || true
 
 if [[ "${DB_RESET_MODE}" == "rebuild" ]]; then
   echo "[1.5/4] Rebuilding latest database schemas/tables/views ..."
@@ -145,11 +147,11 @@ EOF
 
 if ! microk8s kubectl wait --for=condition=complete job/"${MINIO_RESET_JOB}" -n "${STORAGE_NAMESPACE}" --timeout=180s; then
   echo "Error: ${MINIO_RESET_JOB} failed. Dumping job logs:" >&2
-  microk8s kubectl logs -n "${STORAGE_NAMESPACE}" job/"${MINIO_RESET_JOB}" --tail=200 || true
+  microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${STORAGE_NAMESPACE}" job/"${MINIO_RESET_JOB}" --tail=200 || true
   microk8s kubectl describe job -n "${STORAGE_NAMESPACE}" "${MINIO_RESET_JOB}" || true
   exit 1
 fi
-microk8s kubectl logs -n "${STORAGE_NAMESPACE}" job/"${MINIO_RESET_JOB}"
+microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${STORAGE_NAMESPACE}" job/"${MINIO_RESET_JOB}" || true
 
 echo "[3/4] Resetting Airflow metadata/history ..."
 airflow_metadata_reset_performed="false"

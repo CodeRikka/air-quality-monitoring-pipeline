@@ -6,7 +6,7 @@ metadata:
 spec:
   instances: 1
   storage:
-    size: 20Gi
+    size: 10Gi
     storageClass: microk8s-hostpath
   superuserSecret:
     name: postgres-superuser-secret

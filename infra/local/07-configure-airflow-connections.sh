@@ -45,7 +45,7 @@ if [[ -z "${SCHEDULER_POD}" ]]; then
   exit 1
 fi
 
-microk8s kubectl exec -n airflow "${SCHEDULER_POD}" -c scheduler -- env \
+if ! microk8s kubectl exec -n airflow "${SCHEDULER_POD}" -c scheduler -- env \
   POSTGRES_CONN_ID="${POSTGRES_CONN_ID}" \
   POSTGRES_HOST="${POSTGRES_HOST}" \
   POSTGRES_PORT="${POSTGRES_PORT}" \
@@ -83,5 +83,9 @@ airflow connections add "${MINIO_CONN_ID}" \
   --conn-password "${MINIO_SECRET_KEY}" \
   --conn-extra "{\"endpoint_url\":\"${MINIO_ENDPOINT_URL}\",\"aws_access_key_id\":\"${MINIO_ACCESS_KEY}\",\"aws_secret_access_key\":\"${MINIO_SECRET_KEY}\",\"region_name\":\"${AWS_DEFAULT_REGION}\",\"verify\":${VERIFY_TLS}}"
 '
+then
+  echo "Warning: failed to configure Airflow connections via kubectl exec; continuing without blocking deployment." >&2
+  exit 0
+fi
 
 echo "Airflow connections configured: ${POSTGRES_CONN_ID}, ${MINIO_CONN_ID}."

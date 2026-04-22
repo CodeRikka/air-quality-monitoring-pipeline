@@ -7,6 +7,8 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+KUBECTL_BACKEND_TLS_FLAG="${KUBECTL_BACKEND_TLS_FLAG:---insecure-skip-tls-verify-backend=true}"
+
 require_var() {
   local name="$1"
   if [[ -z "${!name:-}" ]]; then
@@ -78,8 +80,8 @@ EOF
 
 if ! microk8s kubectl wait --for=condition=complete job/"${JOB_NAME}" -n "${NAMESPACE}" --timeout=180s; then
   echo "Error: DB init job failed. Dumping job logs:" >&2
-  microk8s kubectl logs -n "${NAMESPACE}" job/"${JOB_NAME}" || true
+  microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${NAMESPACE}" job/"${JOB_NAME}" || true
   exit 1
 fi
 
-microk8s kubectl logs -n "${NAMESPACE}" job/"${JOB_NAME}"
+microk8s kubectl logs ${KUBECTL_BACKEND_TLS_FLAG} -n "${NAMESPACE}" job/"${JOB_NAME}" || true
