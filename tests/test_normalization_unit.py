@@ -41,15 +41,19 @@ class NormalizationUnitTests(unittest.TestCase):
         _stub_module("airflow.providers.amazon.aws.hooks")
         _stub_module("airflow.providers.postgres")
         _stub_module("airflow.providers.postgres.hooks")
+        _stub_module("psycopg2")
+        _stub_module("psycopg2.extras", execute_batch=lambda *args, **kwargs: None)
         _stub_module("airflow.providers.amazon.aws.hooks.s3", S3Hook=_DummyS3Hook)
         _stub_module("airflow.providers.postgres.hooks.postgres", PostgresHook=_DummyPostgresHook)
 
         try:
             # Imported after stubs are in place.
+            from aq_pipeline.load import load_postgres
             from aq_pipeline.transform import normalize_airnow, normalize_aqs
         except Exception as exc:  # pragma: no cover
             raise unittest.SkipTest(f"Normalization modules unavailable in this environment: {exc}") from exc
 
+        cls.load_postgres = load_postgres
         cls.normalize_airnow = normalize_airnow
         cls.normalize_aqs = normalize_aqs
 
@@ -82,6 +86,119 @@ class NormalizationUnitTests(unittest.TestCase):
         self.assertIsNotNone(utc_ts)
         self.assertIsNotNone(local_ts)
         self.assertEqual((utc_ts - local_ts).total_seconds(), 7 * 3600)
+
+    def test_normalize_airnow_row_filters_to_configured_regions(self):
+        pollutant_map = {"pm2.5": "88101"}
+        base_row = {
+            "ParameterName": "PM2.5",
+            "Value": "12.3",
+            "ValidDate": "2026-04-17",
+            "ValidTime": "13",
+            "GMTOffset": "-7",
+        }
+
+        allowed = self.normalize_airnow._normalize_airnow_row(
+            source_row={**base_row, "AQSID": "06-001-0001"},
+            metadata={},
+            pollutant_map=pollutant_map,
+            source_dataset="airnow_hourly_file",
+            default_granularity="hourly",
+            regions=[{"id": "ca_only", "state_codes": ["06"]}],
+        )
+        filtered = self.normalize_airnow._normalize_airnow_row(
+            source_row={**base_row, "AQSID": "12-001-0001"},
+            metadata={},
+            pollutant_map=pollutant_map,
+            source_dataset="airnow_hourly_file",
+            default_granularity="hourly",
+            regions=[{"id": "ca_only", "state_codes": ["06"]}],
+        )
+
+        self.assertIsNotNone(allowed)
+        self.assertEqual(allowed["aqsid"], "060010001")
+        self.assertIsNone(filtered)
+
+    def test_validate_and_prepare_rows_filters_out_of_region_airnow(self):
+        payloads = [
+            {
+                "natural_key": "airnow-allowed",
+                "location_id": "airnow:060010001",
+                "pollutant_code": "88101",
+                "metric_type": "concentration",
+                "value_numeric": 12.3,
+                "unit": "ug/m3",
+                "data_granularity": "hourly",
+                "timestamp_start_utc": "2026-04-17T20:00:00+00:00",
+                "timestamp_end_utc": "2026-04-17T21:00:00+00:00",
+                "timestamp_local": "2026-04-17T13:00:00+00:00",
+                "source_system": "AIRNOW",
+                "source_dataset": "airnow_hourly_file",
+                "source_priority": 10,
+                "data_status": "provisional",
+                "record_hash": "hash-1",
+                "raw_fields": {},
+                "aqsid": "060010001",
+            },
+            {
+                "natural_key": "airnow-filtered",
+                "location_id": "airnow:120010001",
+                "pollutant_code": "88101",
+                "metric_type": "concentration",
+                "value_numeric": 10.1,
+                "unit": "ug/m3",
+                "data_granularity": "hourly",
+                "timestamp_start_utc": "2026-04-17T20:00:00+00:00",
+                "timestamp_end_utc": "2026-04-17T21:00:00+00:00",
+                "timestamp_local": "2026-04-17T15:00:00+00:00",
+                "source_system": "AIRNOW",
+                "source_dataset": "airnow_hourly_file",
+                "source_priority": 10,
+                "data_status": "provisional",
+                "record_hash": "hash-2",
+                "raw_fields": {},
+                "aqsid": "120010001",
+            },
+            {
+                "natural_key": "aqs-kept",
+                "location_id": "aqs:12:001:0001:1",
+                "pollutant_code": "88101",
+                "metric_type": "concentration",
+                "value_numeric": 11.5,
+                "unit": "ug/m3",
+                "data_granularity": "hourly",
+                "timestamp_start_utc": "2026-04-17T20:00:00+00:00",
+                "timestamp_end_utc": "2026-04-17T21:00:00+00:00",
+                "timestamp_local": "2026-04-17T20:00:00+00:00",
+                "source_system": "AQS",
+                "source_dataset": "aqs_sample_observation",
+                "source_priority": 100,
+                "data_status": "final",
+                "record_hash": "hash-3",
+                "raw_fields": {},
+                "aqsid": "120010001",
+            },
+        ]
+
+        valid, rejected, region_filtered = self.load_postgres._validate_and_prepare_rows(
+            payloads,
+            regions=[{"id": "ca_only", "state_codes": ["06"]}],
+        )
+
+        self.assertEqual(rejected, 0)
+        self.assertEqual(region_filtered, 1)
+        self.assertEqual(len(valid), 2)
+        self.assertEqual([row["source_system"] for row in valid], ["AIRNOW", "AQS"])
+
+    def test_parse_location_fields_derives_airnow_state_from_aqsid(self):
+        parsed = self.load_postgres._parse_location_fields(
+            location_id="airnow:060010001",
+            raw_fields={"SiteName": "Test Site", "ReportingArea": "Test City"},
+        )
+
+        self.assertEqual(parsed["aqsid"], "060010001")
+        self.assertEqual(parsed["state_code"], "06")
+        self.assertEqual(parsed["county_code"], "001")
+        self.assertEqual(parsed["site_number"], "0001")
 
 
 if __name__ == "__main__":

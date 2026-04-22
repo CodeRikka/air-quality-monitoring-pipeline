@@ -9,6 +9,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from psycopg2.extras import execute_batch
 
 from aq_pipeline.utils.logging import get_logger
+from aq_pipeline.utils.regions import airnow_aqsid_in_regions, load_regions, normalize_aqsid
 
 
 logger = get_logger(__name__)
@@ -40,13 +41,20 @@ def upsert_observation_tables() -> None:
     run_id = _start_pipeline_run(pg_hook=pg_hook, started_at=started_at)
     try:
         payloads = _fetch_staging_payloads(pg_hook=pg_hook)
-        valid_rows, rejected = _validate_and_prepare_rows(payloads)
+        regions = load_regions()
+        valid_rows, rejected, region_filtered = _validate_and_prepare_rows(payloads, regions=regions)
 
         if rejected > 0:
             _record_data_quality_issue(
                 pg_hook=pg_hook,
                 issue_type="normalize_payload_invalid",
                 issue_detail={"rejected_rows": rejected},
+            )
+        if region_filtered > 0:
+            _record_data_quality_issue(
+                pg_hook=pg_hook,
+                issue_type="airnow_region_filtered",
+                issue_detail={"filtered_rows": region_filtered},
             )
 
         pollutant_defaults = _load_pollutant_defaults()
@@ -59,7 +67,7 @@ def upsert_observation_tables() -> None:
                 pg_hook=pg_hook,
                 run_id=run_id,
                 status="success",
-                message="No valid staging rows to load. Dimension defaults synced.",
+                message="No valid staging rows to load after validation and region filtering. Dimension defaults synced.",
             )
             logger.info("No valid staged rows to load into core tables. Synced dimension defaults only.")
             return
@@ -72,13 +80,17 @@ def upsert_observation_tables() -> None:
             pg_hook=pg_hook,
             run_id=run_id,
             status="success",
-            message=f"Loaded rows={len(valid_rows)} inserted_history={inserted_history} rejected={rejected}",
+            message=(
+                f"Loaded rows={len(valid_rows)} inserted_history={inserted_history} "
+                f"rejected={rejected} region_filtered={region_filtered}"
+            ),
         )
         logger.info(
-            "Load complete: valid_rows=%s inserted_history=%s rejected=%s",
+            "Load complete: valid_rows=%s inserted_history=%s rejected=%s region_filtered=%s",
             len(valid_rows),
             inserted_history,
             rejected,
+            region_filtered,
         )
     except Exception as exc:
         _finish_pipeline_run(
@@ -127,9 +139,14 @@ def _fetch_staging_payloads(*, pg_hook: PostgresHook) -> list[dict[str, Any]]:
     return payloads
 
 
-def _validate_and_prepare_rows(payloads: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _validate_and_prepare_rows(
+    payloads: list[dict[str, Any]],
+    *,
+    regions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
     valid: list[dict[str, Any]] = []
     rejected = 0
+    region_filtered = 0
     for payload in payloads:
         if not _payload_has_required_fields(payload):
             rejected += 1
@@ -170,8 +187,14 @@ def _validate_and_prepare_rows(payloads: list[dict[str, Any]]) -> tuple[list[dic
         if prepared["data_status"] not in {"final", "provisional"}:
             rejected += 1
             continue
+        if prepared["source_system"] == "AIRNOW" and not airnow_aqsid_in_regions(
+            aqsid=prepared["aqsid"],
+            regions=regions,
+        ):
+            region_filtered += 1
+            continue
         valid.append(prepared)
-    return valid, rejected
+    return valid, rejected, region_filtered
 
 
 def _upsert_dim_pollutant(
@@ -884,14 +907,17 @@ def _parse_location_fields(*, location_id: str, raw_fields: dict[str, Any]) -> d
         }
 
     if location_type == "airnow":
+        normalized_aqsid = normalize_aqsid(
+            parts[1] if len(parts) > 1 else _optional_str(raw_fields.get("AQSID") or raw_fields.get("aqsid"))
+        )
         return {
             "location_type": "site",
             "country_code": "US",
-            "state_code": None,
-            "county_code": None,
-            "site_number": None,
+            "state_code": normalized_aqsid[0:2] if normalized_aqsid else None,
+            "county_code": normalized_aqsid[2:5] if normalized_aqsid else None,
+            "site_number": normalized_aqsid[5:9] if normalized_aqsid else None,
             "poc": None,
-            "aqsid": _none_if_na(parts[1] if len(parts) > 1 else None),
+            "aqsid": normalized_aqsid,
             "site_name": _optional_str(raw_fields.get("SiteName") or raw_fields.get("site name")),
             "city_name": _optional_str(raw_fields.get("ReportingArea") or raw_fields.get("reporting area")),
             "timezone_name": None,

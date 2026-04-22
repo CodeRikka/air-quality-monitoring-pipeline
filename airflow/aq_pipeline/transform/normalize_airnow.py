@@ -14,6 +14,7 @@ from psycopg2.extras import execute_batch
 
 from aq_pipeline.utils.keys import build_natural_key, build_record_hash, build_site_natural_location_id
 from aq_pipeline.utils.logging import get_logger
+from aq_pipeline.utils.regions import airnow_aqsid_in_regions, load_regions, normalize_aqsid
 
 
 logger = get_logger(__name__)
@@ -38,16 +39,19 @@ def normalize_airnow_payload() -> None:
     pg_hook = _get_pg_hook()
     s3_hook = _get_s3_hook()
     pollutant_map = _build_airnow_pollutant_map()
+    regions = load_regions()
 
     hourly_written = _normalize_hourly_files(
         pg_hook=pg_hook,
         s3_hook=s3_hook,
         pollutant_map=pollutant_map,
+        regions=regions,
     )
     gapfill_written = _normalize_gapfill_json(
         pg_hook=pg_hook,
         s3_hook=s3_hook,
         pollutant_map=pollutant_map,
+        regions=regions,
     )
     logger.info(
         "AirNow normalization complete: staging_hourly_rows=%s staging_gapfill_rows=%s",
@@ -61,6 +65,7 @@ def _normalize_hourly_files(
     pg_hook: PostgresHook,
     s3_hook: S3Hook,
     pollutant_map: dict[str, str],
+    regions: list[dict[str, Any]],
 ) -> int:
     limit = int(os.getenv("AIRNOW_NORMALIZE_HOURLY_MANIFEST_LIMIT", "500"))
     manifests = pg_hook.get_records(
@@ -87,6 +92,7 @@ def _normalize_hourly_files(
                 pollutant_map=pollutant_map,
                 source_dataset="airnow_hourly_file",
                 default_granularity="hourly",
+                regions=regions,
             )
             if not normalized:
                 continue
@@ -140,6 +146,7 @@ def _normalize_gapfill_json(
     pg_hook: PostgresHook,
     s3_hook: S3Hook,
     pollutant_map: dict[str, str],
+    regions: list[dict[str, Any]],
 ) -> int:
     limit = int(os.getenv("AIRNOW_NORMALIZE_GAP_MANIFEST_LIMIT", "500"))
     manifests = pg_hook.get_records(
@@ -168,6 +175,7 @@ def _normalize_gapfill_json(
                 pollutant_map=pollutant_map,
                 source_dataset="airnow_gapfill_json",
                 default_granularity="hourly",
+                regions=regions,
             )
             if not normalized:
                 continue
@@ -223,6 +231,7 @@ def _normalize_airnow_row(
     pollutant_map: dict[str, str],
     source_dataset: str,
     default_granularity: str,
+    regions: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     parameter_name = _first_non_empty(
         source_row.get("ParameterName"),
@@ -247,6 +256,8 @@ def _normalize_airnow_row(
 
     aqsid = _extract_aqsid(source_row=source_row)
     if not aqsid:
+        return None
+    if not airnow_aqsid_in_regions(aqsid=aqsid, regions=regions):
         return None
     location_id = f"airnow:{aqsid}"
     site_natural_location_id = build_site_natural_location_id(
@@ -414,14 +425,7 @@ def _extract_aqsid(*, source_row: dict[str, Any]) -> str | None:
         source_row.get("full AQSID"),
         source_row.get("aqsid"),
     )
-    if not raw:
-        return None
-    digits = re.sub(r"\D+", "", raw)
-    if len(digits) >= 12 and digits.startswith("840"):
-        return digits[-9:]
-    if len(digits) >= 9:
-        return digits[-9:]
-    return None
+    return normalize_aqsid(raw)
 
 
 def _parse_utc_timestamp(value: str | None) -> datetime | None:
