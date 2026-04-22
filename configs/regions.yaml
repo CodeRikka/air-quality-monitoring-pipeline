@@ -5,5 +5,5 @@ regions:
     name: "San Francisco Bay Area"
   - id: "us_ny_metro"
     country: "US"
-    state_codes: ["34", "36"]
+    state_codes: ["34"]
     name: "New York Metro"
