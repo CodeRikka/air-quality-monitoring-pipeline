@@ -11,16 +11,16 @@ postgresql:
 apiSecretKey: "admin-airflow-api-secret-key"
 
 apiServer:
-  replicas: 1
+  replicas: 2
   service:
     type: NodePort
   resources:
     requests:
-      cpu: "100m"
-      memory: "256Mi"
-    limits:
-      cpu: "500m"
+      cpu: "250m"
       memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
 
 createUserJob:
   defaultUser:

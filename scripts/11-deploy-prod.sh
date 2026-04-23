@@ -51,6 +51,7 @@ microk8s helm3 upgrade --install airflow apache-airflow/airflow \
   -f infra/prod/07-airflow-values.yaml \
   --timeout 15m0s
 
+bash scripts/22-fix-airflow-metadata-sequences.sh "${ENV_FILE}"
 microk8s kubectl rollout status deployment/airflow-api-server -n airflow --timeout="${KUBECTL_WAIT_TIMEOUT}"
 microk8s kubectl rollout status deployment/airflow-scheduler -n airflow --timeout="${KUBECTL_WAIT_TIMEOUT}"
 bash infra/prod/08-configure-airflow-connections.sh "${ENV_FILE}"
