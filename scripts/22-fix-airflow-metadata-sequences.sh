@@ -20,11 +20,11 @@ STORAGE_NAMESPACE="${STORAGE_NAMESPACE:-storage}"
 POSTGRES_HOST="${POSTGRES_HOST:-postgres-rw.storage.svc.cluster.local}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 POSTGRES_DB_AIRFLOW="${POSTGRES_DB_AIRFLOW:-airflow}"
-POSTGRES_USER="${POSTGRES_USER:-admin}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+POSTGRES_METADATA_USER="${POSTGRES_METADATA_USER:-postgres}"
+POSTGRES_METADATA_PASSWORD="${POSTGRES_METADATA_PASSWORD:-${POSTGRES_SUPERUSER_PASSWORD:-${POSTGRES_PASSWORD:-}}}"
 SEQUENCE_FIX_JOB="${SEQUENCE_FIX_JOB:-airflow-metadata-sequence-fix}"
 
-require_var POSTGRES_PASSWORD
+require_var POSTGRES_METADATA_PASSWORD
 
 microk8s kubectl delete job "${SEQUENCE_FIX_JOB}" -n "${STORAGE_NAMESPACE}" --ignore-not-found >/dev/null
 
@@ -44,12 +44,12 @@ spec:
           image: postgres:16
           env:
             - name: PGPASSWORD
-              value: "${POSTGRES_PASSWORD}"
+              value: "${POSTGRES_METADATA_PASSWORD}"
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
-              psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB_AIRFLOW}" <<'SQL'
+              psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_METADATA_USER}" -d "${POSTGRES_DB_AIRFLOW}" <<'SQL'
               SELECT CASE
                 WHEN to_regclass('public.job') IS NULL THEN NULL
                 WHEN pg_get_serial_sequence('public.job', 'id') IS NULL THEN NULL
