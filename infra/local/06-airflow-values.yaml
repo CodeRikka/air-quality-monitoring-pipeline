@@ -11,9 +11,16 @@ postgresql:
 apiSecretKey: "admin-airflow-api-secret-key"
 
 apiServer:
-  replicas: 1
+  replicas: 2
   service:
-    type: NodePort
+    type: ClusterIP
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
 
 createUserJob:
   defaultUser:
@@ -24,6 +31,26 @@ createUserJob:
     firstName: admin
     lastName: user
     password: admin
+
+scheduler:
+  replicas: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "750m"
+      memory: "1Gi"
+
+triggerer:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "300m"
+      memory: "512Mi"
 
 data:
   metadataConnection:
