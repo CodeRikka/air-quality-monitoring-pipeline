@@ -67,7 +67,7 @@ def _normalize_hourly_files(
     pollutant_map: dict[str, str],
     regions: list[dict[str, Any]],
 ) -> int:
-    limit = int(os.getenv("AIRNOW_NORMALIZE_HOURLY_MANIFEST_LIMIT", "500"))
+    limit = int(os.getenv("AIRNOW_NORMALIZE_HOURLY_MANIFEST_LIMIT", "100"))
     manifests = pg_hook.get_records(
         sql="""
             SELECT object_key, metadata
@@ -148,7 +148,7 @@ def _normalize_gapfill_json(
     pollutant_map: dict[str, str],
     regions: list[dict[str, Any]],
 ) -> int:
-    limit = int(os.getenv("AIRNOW_NORMALIZE_GAP_MANIFEST_LIMIT", "500"))
+    limit = int(os.getenv("AIRNOW_NORMALIZE_GAP_MANIFEST_LIMIT", "100"))
     manifests = pg_hook.get_records(
         sql="""
             SELECT object_key, metadata

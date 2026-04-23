@@ -33,6 +33,18 @@ REQUIRED_FIELDS = {
     "data_status",
     "record_hash",
 }
+DEFAULT_STAGING_TABLES = (
+    "staging.aqs_sample_observation",
+    "staging.aqs_daily_observation",
+    "staging.airnow_hourly_observation",
+    "staging.airnow_gapfill_observation",
+)
+DAG_STAGING_TABLES = {
+    "airnow_gap_bootstrap_manual": ("staging.airnow_gapfill_observation",),
+    "airnow_hourly_hot_sync": ("staging.airnow_hourly_observation",),
+    "aqs_bootstrap_manual": ("staging.aqs_sample_observation", "staging.aqs_daily_observation"),
+    "aqs_daily_reconcile": ("staging.aqs_sample_observation", "staging.aqs_daily_observation"),
+}
 
 
 def upsert_observation_tables() -> None:
@@ -103,19 +115,13 @@ def upsert_observation_tables() -> None:
 
 
 def _fetch_staging_payloads(*, pg_hook: PostgresHook) -> list[dict[str, Any]]:
-    query = """
+    staging_tables = _resolve_staging_tables()
+    union_query = "\n            UNION ALL\n".join(
+        f"SELECT payload, ingested_at FROM {table_name}" for table_name in staging_tables
+    )
+    query = f"""
         WITH src AS (
-            SELECT payload, ingested_at
-            FROM staging.aqs_sample_observation
-            UNION ALL
-            SELECT payload, ingested_at
-            FROM staging.aqs_daily_observation
-            UNION ALL
-            SELECT payload, ingested_at
-            FROM staging.airnow_hourly_observation
-            UNION ALL
-            SELECT payload, ingested_at
-            FROM staging.airnow_gapfill_observation
+            {union_query}
         ),
         dedup AS (
             SELECT
@@ -136,6 +142,7 @@ def _fetch_staging_payloads(*, pg_hook: PostgresHook) -> list[dict[str, Any]]:
         payload = record[0]
         if isinstance(payload, dict):
             payloads.append(payload)
+    logger.info("Fetched staged payloads from %s: rows=%s", ",".join(staging_tables), len(payloads))
     return payloads
 
 
@@ -407,288 +414,303 @@ def _upsert_dim_location(*, pg_hook: PostgresHook, rows: list[dict[str, Any]]) -
 
 def _upsert_core_tables(*, pg_hook: PostgresHook, rows: list[dict[str, Any]]) -> int:
     conn = pg_hook.get_conn()
+    batch_size = _get_positive_int_env("LOAD_POSTGRES_BATCH_SIZE", 5000)
+    total_batches = max(1, (len(rows) + batch_size - 1) // batch_size)
     inserted_history = 0
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                    CREATE TEMP TABLE tmp_normalized_observation (
-                        natural_key TEXT NOT NULL,
-                        location_id TEXT NOT NULL,
-                        pollutant_code TEXT NOT NULL,
-                        metric_type TEXT NOT NULL,
-                        value_numeric DOUBLE PRECISION NOT NULL,
-                        unit TEXT NOT NULL,
-                        data_granularity TEXT NOT NULL,
-                        timestamp_start_utc TIMESTAMPTZ NOT NULL,
-                        timestamp_end_utc TIMESTAMPTZ,
-                        timestamp_local TIMESTAMPTZ,
-                        source_system TEXT NOT NULL,
-                        source_dataset TEXT NOT NULL,
-                        source_priority INTEGER NOT NULL,
-                        data_status TEXT NOT NULL,
-                        method_code TEXT,
-                        method_name TEXT,
-                        qualifier_raw TEXT,
-                        source_last_modified_date DATE,
-                        record_hash TEXT NOT NULL
-                    ) ON COMMIT DROP
-                """
-            )
-            execute_batch(
-                cursor,
-                """
-                    INSERT INTO tmp_normalized_observation (
-                        natural_key,
-                        location_id,
-                        pollutant_code,
-                        metric_type,
-                        value_numeric,
-                        unit,
-                        data_granularity,
-                        timestamp_start_utc,
-                        timestamp_end_utc,
-                        timestamp_local,
-                        source_system,
-                        source_dataset,
-                        source_priority,
-                        data_status,
-                        method_code,
-                        method_name,
-                        qualifier_raw,
-                        source_last_modified_date,
-                        record_hash
+        for batch_number, batch_rows in enumerate(_chunk_rows(rows, batch_size), start=1):
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                            CREATE TEMP TABLE tmp_normalized_observation (
+                                natural_key TEXT NOT NULL,
+                                location_id TEXT NOT NULL,
+                                pollutant_code TEXT NOT NULL,
+                                metric_type TEXT NOT NULL,
+                                value_numeric DOUBLE PRECISION NOT NULL,
+                                unit TEXT NOT NULL,
+                                data_granularity TEXT NOT NULL,
+                                timestamp_start_utc TIMESTAMPTZ NOT NULL,
+                                timestamp_end_utc TIMESTAMPTZ,
+                                timestamp_local TIMESTAMPTZ,
+                                source_system TEXT NOT NULL,
+                                source_dataset TEXT NOT NULL,
+                                source_priority INTEGER NOT NULL,
+                                data_status TEXT NOT NULL,
+                                method_code TEXT,
+                                method_name TEXT,
+                                qualifier_raw TEXT,
+                                source_last_modified_date DATE,
+                                record_hash TEXT NOT NULL
+                            ) ON COMMIT DROP
+                        """
                     )
-                    VALUES (
-                        %(natural_key)s,
-                        %(location_id)s,
-                        %(pollutant_code)s,
-                        %(metric_type)s,
-                        %(value_numeric)s,
-                        %(unit)s,
-                        %(data_granularity)s,
-                        %(timestamp_start_utc)s,
-                        %(timestamp_end_utc)s,
-                        %(timestamp_local)s,
-                        %(source_system)s,
-                        %(source_dataset)s,
-                        %(source_priority)s,
-                        %(data_status)s,
-                        %(method_code)s,
-                        %(method_name)s,
-                        %(qualifier_raw)s,
-                        %(source_last_modified_date)s,
-                        %(record_hash)s
+                    execute_batch(
+                        cursor,
+                        """
+                            INSERT INTO tmp_normalized_observation (
+                                natural_key,
+                                location_id,
+                                pollutant_code,
+                                metric_type,
+                                value_numeric,
+                                unit,
+                                data_granularity,
+                                timestamp_start_utc,
+                                timestamp_end_utc,
+                                timestamp_local,
+                                source_system,
+                                source_dataset,
+                                source_priority,
+                                data_status,
+                                method_code,
+                                method_name,
+                                qualifier_raw,
+                                source_last_modified_date,
+                                record_hash
+                            )
+                            VALUES (
+                                %(natural_key)s,
+                                %(location_id)s,
+                                %(pollutant_code)s,
+                                %(metric_type)s,
+                                %(value_numeric)s,
+                                %(unit)s,
+                                %(data_granularity)s,
+                                %(timestamp_start_utc)s,
+                                %(timestamp_end_utc)s,
+                                %(timestamp_local)s,
+                                %(source_system)s,
+                                %(source_dataset)s,
+                                %(source_priority)s,
+                                %(data_status)s,
+                                %(method_code)s,
+                                %(method_name)s,
+                                %(qualifier_raw)s,
+                                %(source_last_modified_date)s,
+                                %(record_hash)s
+                            )
+                        """,
+                        batch_rows,
+                        page_size=min(500, len(batch_rows)),
                     )
-                """,
-                rows,
-                page_size=500,
-            )
 
-            cursor.execute(
-                """
-                    INSERT INTO core.fact_observation_history (
-                        natural_key,
-                        location_id,
-                        pollutant_code,
-                        metric_type,
-                        value_numeric,
-                        unit,
-                        data_granularity,
-                        timestamp_start_utc,
-                        timestamp_end_utc,
-                        timestamp_local,
-                        source_system,
-                        source_dataset,
-                        source_priority,
-                        data_status,
-                        method_code,
-                        method_name,
-                        qualifier_raw,
-                        source_last_modified_date,
-                        is_current_version,
-                        record_hash
+                    cursor.execute(
+                        """
+                            INSERT INTO core.fact_observation_history (
+                                natural_key,
+                                location_id,
+                                pollutant_code,
+                                metric_type,
+                                value_numeric,
+                                unit,
+                                data_granularity,
+                                timestamp_start_utc,
+                                timestamp_end_utc,
+                                timestamp_local,
+                                source_system,
+                                source_dataset,
+                                source_priority,
+                                data_status,
+                                method_code,
+                                method_name,
+                                qualifier_raw,
+                                source_last_modified_date,
+                                is_current_version,
+                                record_hash
+                            )
+                            SELECT
+                                t.natural_key,
+                                t.location_id,
+                                t.pollutant_code,
+                                t.metric_type,
+                                t.value_numeric,
+                                t.unit,
+                                t.data_granularity,
+                                t.timestamp_start_utc,
+                                t.timestamp_end_utc,
+                                t.timestamp_local,
+                                t.source_system,
+                                t.source_dataset,
+                                t.source_priority,
+                                t.data_status,
+                                t.method_code,
+                                t.method_name,
+                                t.qualifier_raw,
+                                t.source_last_modified_date,
+                                FALSE,
+                                t.record_hash
+                            FROM tmp_normalized_observation t
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                FROM core.fact_observation_history h
+                                WHERE h.natural_key = t.natural_key
+                                  AND h.record_hash = t.record_hash
+                                  AND h.source_system = t.source_system
+                            )
+                        """
                     )
-                    SELECT
-                        t.natural_key,
-                        t.location_id,
-                        t.pollutant_code,
-                        t.metric_type,
-                        t.value_numeric,
-                        t.unit,
-                        t.data_granularity,
-                        t.timestamp_start_utc,
-                        t.timestamp_end_utc,
-                        t.timestamp_local,
-                        t.source_system,
-                        t.source_dataset,
-                        t.source_priority,
-                        t.data_status,
-                        t.method_code,
-                        t.method_name,
-                        t.qualifier_raw,
-                        t.source_last_modified_date,
-                        FALSE,
-                        t.record_hash
-                    FROM tmp_normalized_observation t
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM core.fact_observation_history h
-                        WHERE h.natural_key = t.natural_key
-                          AND h.record_hash = t.record_hash
-                          AND h.source_system = t.source_system
+                    batch_inserted_history = cursor.rowcount
+
+                    cursor.execute(
+                        """
+                            INSERT INTO ops.airnow_revision_audit (
+                                natural_key,
+                                old_value,
+                                new_value,
+                                old_hash,
+                                new_hash
+                            )
+                            SELECT
+                                c.natural_key,
+                                c.value_numeric,
+                                t.value_numeric,
+                                c.record_hash,
+                                t.record_hash
+                            FROM tmp_normalized_observation t
+                            JOIN core.fact_observation_current c
+                              ON c.natural_key = t.natural_key
+                            WHERE c.source_system = 'AIRNOW'
+                              AND t.source_system = 'AIRNOW'
+                              AND c.source_priority = t.source_priority
+                              AND c.record_hash <> t.record_hash
+                        """
                     )
-                """
-            )
-            inserted_history = cursor.rowcount
 
-            cursor.execute(
-                """
-                    INSERT INTO ops.airnow_revision_audit (
-                        natural_key,
-                        old_value,
-                        new_value,
-                        old_hash,
-                        new_hash
+                    cursor.execute(
+                        """
+                            INSERT INTO core.fact_observation_current (
+                                natural_key,
+                                location_id,
+                                pollutant_code,
+                                metric_type,
+                                value_numeric,
+                                unit,
+                                data_granularity,
+                                timestamp_start_utc,
+                                timestamp_end_utc,
+                                timestamp_local,
+                                source_system,
+                                source_dataset,
+                                source_priority,
+                                data_status,
+                                method_code,
+                                method_name,
+                                qualifier_raw,
+                                source_last_modified_date,
+                                record_hash,
+                                updated_at
+                            )
+                            SELECT
+                                latest.natural_key,
+                                latest.location_id,
+                                latest.pollutant_code,
+                                latest.metric_type,
+                                latest.value_numeric,
+                                latest.unit,
+                                latest.data_granularity,
+                                latest.timestamp_start_utc,
+                                latest.timestamp_end_utc,
+                                latest.timestamp_local,
+                                latest.source_system,
+                                latest.source_dataset,
+                                latest.source_priority,
+                                latest.data_status,
+                                latest.method_code,
+                                latest.method_name,
+                                latest.qualifier_raw,
+                                latest.source_last_modified_date,
+                                latest.record_hash,
+                                NOW()
+                            FROM (
+                                SELECT DISTINCT ON (natural_key)
+                                    natural_key,
+                                    location_id,
+                                    pollutant_code,
+                                    metric_type,
+                                    value_numeric,
+                                    unit,
+                                    data_granularity,
+                                    timestamp_start_utc,
+                                    timestamp_end_utc,
+                                    timestamp_local,
+                                    source_system,
+                                    source_dataset,
+                                    source_priority,
+                                    data_status,
+                                    method_code,
+                                    method_name,
+                                    qualifier_raw,
+                                    source_last_modified_date,
+                                    record_hash
+                                FROM tmp_normalized_observation
+                                ORDER BY
+                                    natural_key,
+                                    source_priority DESC,
+                                    timestamp_start_utc DESC NULLS LAST,
+                                    source_last_modified_date DESC NULLS LAST,
+                                    record_hash DESC
+                            ) latest
+                            ON CONFLICT (natural_key) DO UPDATE
+                            SET location_id = EXCLUDED.location_id,
+                                pollutant_code = EXCLUDED.pollutant_code,
+                                metric_type = EXCLUDED.metric_type,
+                                value_numeric = EXCLUDED.value_numeric,
+                                unit = EXCLUDED.unit,
+                                data_granularity = EXCLUDED.data_granularity,
+                                timestamp_start_utc = EXCLUDED.timestamp_start_utc,
+                                timestamp_end_utc = EXCLUDED.timestamp_end_utc,
+                                timestamp_local = EXCLUDED.timestamp_local,
+                                source_system = EXCLUDED.source_system,
+                                source_dataset = EXCLUDED.source_dataset,
+                                source_priority = EXCLUDED.source_priority,
+                                data_status = EXCLUDED.data_status,
+                                method_code = EXCLUDED.method_code,
+                                method_name = EXCLUDED.method_name,
+                                qualifier_raw = EXCLUDED.qualifier_raw,
+                                source_last_modified_date = EXCLUDED.source_last_modified_date,
+                                record_hash = EXCLUDED.record_hash,
+                                updated_at = NOW()
+                            WHERE EXCLUDED.source_priority > core.fact_observation_current.source_priority
+                               OR (
+                                    EXCLUDED.source_priority = core.fact_observation_current.source_priority
+                                    AND EXCLUDED.record_hash <> core.fact_observation_current.record_hash
+                               )
+                        """
                     )
-                    SELECT
-                        c.natural_key,
-                        c.value_numeric,
-                        t.value_numeric,
-                        c.record_hash,
-                        t.record_hash
-                    FROM tmp_normalized_observation t
-                    JOIN core.fact_observation_current c
-                      ON c.natural_key = t.natural_key
-                    WHERE c.source_system = 'AIRNOW'
-                      AND t.source_system = 'AIRNOW'
-                      AND c.source_priority = t.source_priority
-                      AND c.record_hash <> t.record_hash
-                """
-            )
 
-            cursor.execute(
-                """
-                    INSERT INTO core.fact_observation_current (
-                        natural_key,
-                        location_id,
-                        pollutant_code,
-                        metric_type,
-                        value_numeric,
-                        unit,
-                        data_granularity,
-                        timestamp_start_utc,
-                        timestamp_end_utc,
-                        timestamp_local,
-                        source_system,
-                        source_dataset,
-                        source_priority,
-                        data_status,
-                        method_code,
-                        method_name,
-                        qualifier_raw,
-                        source_last_modified_date,
-                        record_hash,
-                        updated_at
+                    cursor.execute(
+                        """
+                            UPDATE core.fact_observation_history h
+                            SET is_current_version = FALSE
+                            WHERE h.natural_key IN (SELECT DISTINCT natural_key FROM tmp_normalized_observation)
+                        """
                     )
-                    SELECT
-                        latest.natural_key,
-                        latest.location_id,
-                        latest.pollutant_code,
-                        latest.metric_type,
-                        latest.value_numeric,
-                        latest.unit,
-                        latest.data_granularity,
-                        latest.timestamp_start_utc,
-                        latest.timestamp_end_utc,
-                        latest.timestamp_local,
-                        latest.source_system,
-                        latest.source_dataset,
-                        latest.source_priority,
-                        latest.data_status,
-                        latest.method_code,
-                        latest.method_name,
-                        latest.qualifier_raw,
-                        latest.source_last_modified_date,
-                        latest.record_hash,
-                        NOW()
-                    FROM (
-                        SELECT DISTINCT ON (natural_key)
-                            natural_key,
-                            location_id,
-                            pollutant_code,
-                            metric_type,
-                            value_numeric,
-                            unit,
-                            data_granularity,
-                            timestamp_start_utc,
-                            timestamp_end_utc,
-                            timestamp_local,
-                            source_system,
-                            source_dataset,
-                            source_priority,
-                            data_status,
-                            method_code,
-                            method_name,
-                            qualifier_raw,
-                            source_last_modified_date,
-                            record_hash
-                        FROM tmp_normalized_observation
-                        ORDER BY
-                            natural_key,
-                            source_priority DESC,
-                            timestamp_start_utc DESC NULLS LAST,
-                            source_last_modified_date DESC NULLS LAST,
-                            record_hash DESC
-                    ) latest
-                    ON CONFLICT (natural_key) DO UPDATE
-                    SET location_id = EXCLUDED.location_id,
-                        pollutant_code = EXCLUDED.pollutant_code,
-                        metric_type = EXCLUDED.metric_type,
-                        value_numeric = EXCLUDED.value_numeric,
-                        unit = EXCLUDED.unit,
-                        data_granularity = EXCLUDED.data_granularity,
-                        timestamp_start_utc = EXCLUDED.timestamp_start_utc,
-                        timestamp_end_utc = EXCLUDED.timestamp_end_utc,
-                        timestamp_local = EXCLUDED.timestamp_local,
-                        source_system = EXCLUDED.source_system,
-                        source_dataset = EXCLUDED.source_dataset,
-                        source_priority = EXCLUDED.source_priority,
-                        data_status = EXCLUDED.data_status,
-                        method_code = EXCLUDED.method_code,
-                        method_name = EXCLUDED.method_name,
-                        qualifier_raw = EXCLUDED.qualifier_raw,
-                        source_last_modified_date = EXCLUDED.source_last_modified_date,
-                        record_hash = EXCLUDED.record_hash,
-                        updated_at = NOW()
-                    WHERE EXCLUDED.source_priority > core.fact_observation_current.source_priority
-                       OR (
-                            EXCLUDED.source_priority = core.fact_observation_current.source_priority
-                            AND EXCLUDED.record_hash <> core.fact_observation_current.record_hash
-                       )
-                """
-            )
 
-            cursor.execute(
-                """
-                    UPDATE core.fact_observation_history h
-                    SET is_current_version = FALSE
-                    WHERE h.natural_key IN (SELECT DISTINCT natural_key FROM tmp_normalized_observation)
-                """
+                    cursor.execute(
+                        """
+                            UPDATE core.fact_observation_history h
+                            SET is_current_version = TRUE
+                            FROM core.fact_observation_current c
+                            WHERE h.natural_key = c.natural_key
+                              AND h.record_hash = c.record_hash
+                              AND h.source_system = c.source_system
+                              AND h.natural_key IN (SELECT DISTINCT natural_key FROM tmp_normalized_observation)
+                        """
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            inserted_history += batch_inserted_history
+            logger.info(
+                "Committed observation load batch %s/%s rows=%s inserted_history=%s",
+                batch_number,
+                total_batches,
+                len(batch_rows),
+                batch_inserted_history,
             )
-
-            cursor.execute(
-                """
-                    UPDATE core.fact_observation_history h
-                    SET is_current_version = TRUE
-                    FROM core.fact_observation_current c
-                    WHERE h.natural_key = c.natural_key
-                      AND h.record_hash = c.record_hash
-                      AND h.source_system = c.source_system
-                      AND h.natural_key IN (SELECT DISTINCT natural_key FROM tmp_normalized_observation)
-                """
-            )
-        conn.commit()
     finally:
         conn.close()
     return inserted_history
@@ -763,6 +785,31 @@ def _update_source_watermarks(
         regions=regions,
         pollutant_codes=pollutant_codes,
     )
+
+
+def _resolve_staging_tables() -> tuple[str, ...]:
+    dag_id = os.getenv("AIRFLOW_CTX_DAG_ID", "").strip()
+    tables = DAG_STAGING_TABLES.get(dag_id, DEFAULT_STAGING_TABLES)
+    return tuple(tables)
+
+
+def _chunk_rows(rows: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:
+    return [rows[index : index + chunk_size] for index in range(0, len(rows), chunk_size)]
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        logger.warning("Invalid %s=%s; using default=%s", name, raw_value, default)
+        return default
+    if parsed < 1:
+        logger.warning("Non-positive %s=%s; using default=%s", name, raw_value, default)
+        return default
+    return parsed
 
 
 def _update_aqs_tail_watermarks(

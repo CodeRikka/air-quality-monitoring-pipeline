@@ -146,6 +146,27 @@ secret:
   - envName: AIRNOW_API_KEY
     secretName: air-quality-secrets
     secretKey: AIRNOW_API_KEY
+  - envName: AIRNOW_GAP_START_UTC
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_GAP_START_UTC
+  - envName: AIRNOW_GAP_END_UTC
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_GAP_END_UTC
+  - envName: AIRNOW_GAP_CHUNK_HOURS
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_GAP_CHUNK_HOURS
+  - envName: AIRNOW_GAP_FALLBACK_HOURS
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_GAP_FALLBACK_HOURS
+  - envName: AIRNOW_NORMALIZE_HOURLY_MANIFEST_LIMIT
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_NORMALIZE_HOURLY_MANIFEST_LIMIT
+  - envName: AIRNOW_NORMALIZE_GAP_MANIFEST_LIMIT
+    secretName: air-quality-secrets
+    secretKey: AIRNOW_NORMALIZE_GAP_MANIFEST_LIMIT
+  - envName: LOAD_POSTGRES_BATCH_SIZE
+    secretName: air-quality-secrets
+    secretKey: LOAD_POSTGRES_BATCH_SIZE
   - envName: POSTGRES_USER
     secretName: air-quality-secrets
     secretKey: POSTGRES_USER

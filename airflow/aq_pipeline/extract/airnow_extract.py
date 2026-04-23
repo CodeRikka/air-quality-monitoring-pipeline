@@ -20,7 +20,7 @@ def run_airnow_gap_bootstrap_extract() -> None:
     logger.info("Running AirNow gap bootstrap extraction")
     client = AirNowClient()
     pg_hook = _get_pg_hook()
-    gap_chunk_hours = max(1, int(os.getenv("AIRNOW_GAP_CHUNK_HOURS", "24")))
+    gap_chunk_hours = max(1, int(os.getenv("AIRNOW_GAP_CHUNK_HOURS", "6")))
     start_dt, end_dt, aqs_tail_utc = _resolve_gap_bootstrap_window(pg_hook=pg_hook)
 
     if start_dt > end_dt:
@@ -284,7 +284,7 @@ def _resolve_gap_bootstrap_window(*, pg_hook: PostgresHook) -> tuple[datetime, d
         start_dt = aqs_tail_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
         return start_dt, end_dt, aqs_tail_utc
 
-    fallback_hours = max(1, int(os.getenv("AIRNOW_GAP_FALLBACK_HOURS", "24")))
+    fallback_hours = max(1, int(os.getenv("AIRNOW_GAP_FALLBACK_HOURS", "6")))
     return end_dt - timedelta(hours=fallback_hours - 1), end_dt, None
 
 

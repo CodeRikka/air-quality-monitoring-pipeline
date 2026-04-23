@@ -2,6 +2,7 @@ import sys
 import types
 import unittest
 from datetime import timezone
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -199,6 +200,19 @@ class NormalizationUnitTests(unittest.TestCase):
         self.assertEqual(parsed["state_code"], "06")
         self.assertEqual(parsed["county_code"], "001")
         self.assertEqual(parsed["site_number"], "0001")
+
+    def test_resolve_staging_tables_uses_dag_specific_sources(self):
+        with patch.dict("os.environ", {"AIRFLOW_CTX_DAG_ID": "airnow_gap_bootstrap_manual"}, clear=False):
+            tables = self.load_postgres._resolve_staging_tables()
+
+        self.assertEqual(tables, ("staging.airnow_gapfill_observation",))
+
+    def test_chunk_rows_splits_into_configured_batches(self):
+        rows = [{"natural_key": str(index)} for index in range(5)]
+
+        chunks = self.load_postgres._chunk_rows(rows, 2)
+
+        self.assertEqual([len(chunk) for chunk in chunks], [2, 2, 1])
 
 
 if __name__ == "__main__":
