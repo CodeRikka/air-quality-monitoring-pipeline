@@ -5,6 +5,7 @@ from hashlib import sha256
 from urllib.parse import urlencode
 
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from requests import HTTPError
 
 from aq_pipeline.clients.airnow_client import AirNowClient
 from aq_pipeline.load.load_minio import write_raw_object
@@ -38,83 +39,84 @@ def run_airnow_gap_bootstrap_extract() -> None:
 
     request_count = 0
     request_failures = 0
+    successful_chunks = 0
     written = 0
     empty = 0
 
     chunk_start = start_dt
     while chunk_start <= end_dt:
         chunk_end = min(chunk_start + timedelta(hours=gap_chunk_hours - 1), end_dt)
-        params = {
-            "startDate": _format_airnow_hour(chunk_start),
-            "endDate": _format_airnow_hour(chunk_end),
-            "parameters": os.getenv("AIRNOW_GAP_PARAMETERS", "PM25"),
-            "BBOX": os.getenv("AIRNOW_GAP_BBOX", "-125,24,-66,49"),
-            "dataType": os.getenv("AIRNOW_GAP_DATATYPE", "B"),
-            "format": "application/json",
-            "monitorType": os.getenv("AIRNOW_GAP_MONITOR_TYPE", "0"),
-            "includerawconcentrations": os.getenv("AIRNOW_GAP_INCLUDE_RAW", "1"),
-            "verbose": os.getenv("AIRNOW_GAP_VERBOSE", "1"),
-        }
-        request_count += 1
-        try:
-            payload = client.get_observations(params)
-        except Exception as exc:
-            request_failures += 1
-            _record_data_quality_issue(
-                pg_hook=pg_hook,
-                issue_type="airnow_gap_request_failed",
-                issue_detail={"params": params, "error": str(exc)},
-            )
-            logger.exception("Gap bootstrap request failed: params=%s", params)
-            chunk_start = chunk_end + timedelta(hours=1)
-            continue
-
-        row_count = len(payload) if isinstance(payload, list) else 0
-        if row_count == 0:
-            empty += 1
-            _record_data_quality_issue(
-                pg_hook=pg_hook,
-                issue_type="airnow_gap_empty_response",
-                issue_detail={"params": params},
-            )
-
-        payload_bytes = json.dumps(
-            payload,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        payload_sha = sha256(payload_bytes).hexdigest()
-        manifest = write_raw_object(
-            dataset="airnow_gapfill_json",
-            payload=payload,
-            source_url=_build_airnow_source_url(client, params),
-            object_key=_build_gapfill_object_key(
-                chunk_start=chunk_start,
-                chunk_end=chunk_end,
-                content_sha256=payload_sha,
-            ),
-            metadata={
-                "query_params": params,
-                "run_type": "gap_bootstrap",
-                "aqs_tail_utc": aqs_tail_utc.isoformat() if aqs_tail_utc else None,
-                "chunk_start_utc": chunk_start.isoformat(),
-                "chunk_end_utc": chunk_end.isoformat(),
-                "row_count": row_count,
-                "is_empty": row_count == 0,
-            },
+        subchunks = _extract_gap_window_with_split(
+            client=client,
+            chunk_start=chunk_start,
+            chunk_end=chunk_end,
         )
-        written += 1
-        logger.info(
-            "AirNow gap chunk complete: start=%s end=%s rows=%s object_key=%s",
-            chunk_start.isoformat(),
-            chunk_end.isoformat(),
-            row_count,
-            manifest["object_key"],
-        )
+        for subchunk in subchunks:
+            request_count += subchunk["requests"]
+            if subchunk["error"]:
+                request_failures += 1
+                _record_data_quality_issue(
+                    pg_hook=pg_hook,
+                    issue_type="airnow_gap_request_failed",
+                    issue_detail={"params": subchunk["params"], "error": subchunk["error"]},
+                )
+                logger.error(
+                    "Gap bootstrap request failed after retries: start=%s end=%s params=%s error=%s",
+                    subchunk["chunk_start"].isoformat(),
+                    subchunk["chunk_end"].isoformat(),
+                    subchunk["params"],
+                    subchunk["error"],
+                )
+                continue
+
+            payload = subchunk["payload"]
+            successful_chunks += 1
+            row_count = len(payload) if isinstance(payload, list) else 0
+            if row_count == 0:
+                empty += 1
+                _record_data_quality_issue(
+                    pg_hook=pg_hook,
+                    issue_type="airnow_gap_empty_response",
+                    issue_detail={"params": subchunk["params"]},
+                )
+
+            payload_bytes = json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            payload_sha = sha256(payload_bytes).hexdigest()
+            manifest = write_raw_object(
+                dataset="airnow_gapfill_json",
+                payload=payload,
+                source_url=_build_airnow_source_url(client, subchunk["params"]),
+                object_key=_build_gapfill_object_key(
+                    chunk_start=subchunk["chunk_start"],
+                    chunk_end=subchunk["chunk_end"],
+                    content_sha256=payload_sha,
+                ),
+                metadata={
+                    "query_params": subchunk["params"],
+                    "run_type": "gap_bootstrap",
+                    "aqs_tail_utc": aqs_tail_utc.isoformat() if aqs_tail_utc else None,
+                    "chunk_start_utc": subchunk["chunk_start"].isoformat(),
+                    "chunk_end_utc": subchunk["chunk_end"].isoformat(),
+                    "row_count": row_count,
+                    "is_empty": row_count == 0,
+                },
+            )
+            written += 1
+            logger.info(
+                "AirNow gap chunk complete: start=%s end=%s rows=%s object_key=%s",
+                subchunk["chunk_start"].isoformat(),
+                subchunk["chunk_end"].isoformat(),
+                row_count,
+                manifest["object_key"],
+            )
         chunk_start = chunk_end + timedelta(hours=1)
 
-    if request_count > 0 and request_failures == request_count:
+    if request_count > 0 and successful_chunks == 0:
         raise RuntimeError("AirNow gap bootstrap extraction failed for all chunks.")
 
     logger.info(
@@ -401,6 +403,118 @@ def _parse_airnow_datetime(value: str) -> datetime:
 
 def _format_airnow_hour(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H")
+
+
+def _build_gap_params(chunk_start: datetime, chunk_end: datetime) -> dict[str, str]:
+    return {
+        "startDate": _format_airnow_hour(chunk_start),
+        "endDate": _format_airnow_hour(chunk_end),
+        "parameters": os.getenv("AIRNOW_GAP_PARAMETERS", "PM25"),
+        "BBOX": os.getenv("AIRNOW_GAP_BBOX", "-125,24,-66,49"),
+        "dataType": os.getenv("AIRNOW_GAP_DATATYPE", "B"),
+        "format": "application/json",
+        "monitorType": os.getenv("AIRNOW_GAP_MONITOR_TYPE", "0"),
+        "includerawconcentrations": os.getenv("AIRNOW_GAP_INCLUDE_RAW", "1"),
+        "verbose": os.getenv("AIRNOW_GAP_VERBOSE", "1"),
+    }
+
+
+def _extract_gap_window_with_split(
+    *,
+    client: AirNowClient,
+    chunk_start: datetime,
+    chunk_end: datetime,
+) -> list[dict[str, object]]:
+    params = _build_gap_params(chunk_start, chunk_end)
+    try:
+        payload = client.get_observations(params)
+        return [
+            {
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
+                "params": params,
+                "payload": payload,
+                "error": None,
+                "requests": 1,
+            }
+        ]
+    except HTTPError as exc:
+        if _is_airnow_record_limit_error(exc) and chunk_start < chunk_end:
+            split_point = chunk_start + timedelta(hours=_window_hour_count(chunk_start, chunk_end) // 2 - 1)
+            logger.warning(
+                "AirNow gap window exceeded record limit. Splitting request: start=%s end=%s split_end=%s",
+                chunk_start.isoformat(),
+                chunk_end.isoformat(),
+                split_point.isoformat(),
+            )
+            left = _extract_gap_window_with_split(
+                client=client,
+                chunk_start=chunk_start,
+                chunk_end=split_point,
+            )
+            right = _extract_gap_window_with_split(
+                client=client,
+                chunk_start=split_point + timedelta(hours=1),
+                chunk_end=chunk_end,
+            )
+            left_requests = sum(int(item["requests"]) for item in left)
+            right_requests = sum(int(item["requests"]) for item in right)
+            if left:
+                left[0]["requests"] = int(left[0]["requests"]) + 1
+            elif right:
+                right[0]["requests"] = int(right[0]["requests"]) + 1
+            else:
+                return [
+                    {
+                        "chunk_start": chunk_start,
+                        "chunk_end": chunk_end,
+                        "params": params,
+                        "payload": None,
+                        "error": _format_airnow_exception(exc),
+                        "requests": 1 + left_requests + right_requests,
+                    }
+                ]
+            return left + right
+        return [
+            {
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
+                "params": params,
+                "payload": None,
+                "error": _format_airnow_exception(exc),
+                "requests": 1,
+            }
+        ]
+    except Exception as exc:
+        return [
+            {
+                "chunk_start": chunk_start,
+                "chunk_end": chunk_end,
+                "params": params,
+                "payload": None,
+                "error": _format_airnow_exception(exc),
+                "requests": 1,
+            }
+        ]
+
+
+def _window_hour_count(chunk_start: datetime, chunk_end: datetime) -> int:
+    return int((chunk_end - chunk_start).total_seconds() // 3600) + 1
+
+
+def _is_airnow_record_limit_error(exc: HTTPError) -> bool:
+    response = exc.response
+    if response is None:
+        return False
+    return "exceeds the record query limit" in (response.text or "").lower()
+
+
+def _format_airnow_exception(exc: Exception) -> str:
+    if isinstance(exc, HTTPError) and exc.response is not None:
+        response_text = (exc.response.text or "").strip()
+        if response_text:
+            return f"{exc} response={response_text}"
+    return str(exc)
 
 
 def _build_airnow_source_url(client: AirNowClient, params: dict[str, str]) -> str:
