@@ -50,7 +50,7 @@ spec:
             - |
               set -e
               psql -v ON_ERROR_STOP=1 -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB_AIRFLOW}" <<'SQL'
-              DO $$
+              DO \$\$
               DECLARE
                 job_seq text;
                 max_job_id bigint;
@@ -69,7 +69,7 @@ spec:
                 SELECT COALESCE(MAX(id), 1) INTO max_job_id FROM public.job;
                 EXECUTE format('SELECT setval(%L, %s, true)', job_seq, max_job_id);
                 RAISE NOTICE 'Aligned % to %.', job_seq, max_job_id;
-              END $$;
+              END \$\$;
               SQL
 EOF
 
