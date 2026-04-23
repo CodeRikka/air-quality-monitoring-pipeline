@@ -1,3 +1,5 @@
+-- Serving-layer defaults use official daily observations only.
+-- Finer-grained sample/hourly observations remain in core tables for detail workflows.
 CREATE OR REPLACE VIEW mart.v_latest_station_observation AS
 WITH ranked AS (
     SELECT
@@ -7,6 +9,7 @@ WITH ranked AS (
             ORDER BY c.timestamp_start_utc DESC, c.updated_at DESC
         ) AS rn
     FROM core.fact_observation_current c
+    WHERE c.data_granularity = 'daily'
 )
 SELECT
     r.natural_key,
@@ -61,6 +64,7 @@ SELECT
 FROM core.fact_observation_current c
 JOIN core.dim_location l ON c.location_id = l.location_id
 JOIN core.dim_pollutant p ON c.pollutant_code = p.pollutant_code
+WHERE c.data_granularity = 'daily'
 GROUP BY 1, 2, 3, 4, 5, 6;
 
 CREATE OR REPLACE VIEW mart.v_monthly_trend AS
@@ -78,6 +82,7 @@ SELECT
 FROM core.fact_observation_current c
 JOIN core.dim_location l ON c.location_id = l.location_id
 JOIN core.dim_pollutant p ON c.pollutant_code = p.pollutant_code
+WHERE c.data_granularity = 'daily'
 GROUP BY 1, 2, 3, 4, 5, 6;
 
 CREATE OR REPLACE VIEW mart.v_seasonal_trend AS
@@ -96,6 +101,7 @@ SELECT
 FROM core.fact_observation_current c
 JOIN core.dim_location l ON c.location_id = l.location_id
 JOIN core.dim_pollutant p ON c.pollutant_code = p.pollutant_code
+WHERE c.data_granularity = 'daily'
 GROUP BY 1, 2, 3, 4, 5, 6, 7;
 
 CREATE OR REPLACE VIEW mart.v_region_coverage AS
@@ -109,6 +115,7 @@ WITH daily_observed AS (
         c.natural_key
     FROM core.fact_observation_current c
     JOIN core.dim_location l ON c.location_id = l.location_id
+    WHERE c.data_granularity = 'daily'
 ),
 region_station_totals AS (
     SELECT
@@ -118,6 +125,7 @@ region_station_totals AS (
         COUNT(DISTINCT c.location_id) AS total_station_count
     FROM core.fact_observation_current c
     JOIN core.dim_location l ON c.location_id = l.location_id
+    WHERE c.data_granularity = 'daily'
     GROUP BY 1, 2, 3
 )
 SELECT
@@ -170,7 +178,8 @@ JOIN core.dim_exceedance_threshold t
   ON c.pollutant_code = t.pollutant_code
  AND c.unit = t.unit
  AND t.is_active = TRUE
-WHERE c.value_numeric > t.threshold_value;
+WHERE c.data_granularity = 'daily'
+  AND c.value_numeric > t.threshold_value;
 
 CREATE OR REPLACE VIEW mart.v_anomaly_spikes AS
 WITH daily_region AS (
@@ -183,6 +192,7 @@ WITH daily_region AS (
         COUNT(*) AS observation_count
     FROM core.fact_observation_current c
     JOIN core.dim_location l ON c.location_id = l.location_id
+    WHERE c.data_granularity = 'daily'
     GROUP BY 1, 2, 3, 4
 ),
 scored AS (

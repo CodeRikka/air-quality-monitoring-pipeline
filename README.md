@@ -53,6 +53,8 @@ At a high level, the platform looks like this:
 - daily summary observations
 - daily reconciliation using change-date windows
 
+The pipeline keeps both `sample` and `daily` observations in the core fact tables. The serving layer defaults to `daily` observations only so dashboards and API summaries do not mix granularities.
+
 The AQS client and extract logic live under:
 
 - `airflow/aq_pipeline/clients/aqs_client.py`
@@ -174,6 +176,7 @@ FastAPI exposes database-backed endpoints such as:
 - `GET /quality/coverage`
 
 The Streamlit dashboard calls only these HTTP endpoints and does not connect to PostgreSQL directly.
+These serving endpoints read `mart` views that default to `data_granularity = 'daily'`. Finer-grained `sample` and `hourly` observations remain available in the core fact tables for detail workflows and debugging.
 
 ## Prerequisites
 

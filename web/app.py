@@ -63,15 +63,16 @@ with st.expander("API health checks", expanded=False):
 
 tab_map, tab_station, tab_region, tab_quality = st.tabs(
     [
-        "Latest Map",
-        "Station Time Series",
+        "Latest Daily Map",
+        "Station Daily Time Series",
         "Regional Trend",
         "Data Completeness",
     ]
 )
 
 with tab_map:
-    st.subheader("Latest Map")
+    st.subheader("Latest Daily Map")
+    st.caption("Shows the most recent daily observation for each station and pollutant.")
     map_payload = fetch_page(
         "/map/latest",
         {
@@ -107,7 +108,7 @@ with tab_map:
         st.info("No map points found for the current filters.")
 
 with tab_station:
-    st.subheader("Single-Station Time Series")
+    st.subheader("Single-Station Daily Time Series")
     station_location_id = st.text_input("Location ID", value="", placeholder="aqs:06:075:0010:1")
     station_pollutant_code = st.text_input(
         "Station pollutant code",
