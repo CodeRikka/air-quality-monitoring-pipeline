@@ -384,6 +384,8 @@ This helper can:
 - restart Airflow pods
 - run the post-deploy health check
 
+For `EPA_AQS_EMAIL`, `EPA_AQS_KEY`, and `AIRNOW_API_KEY`, the helper does not inject repository-managed defaults. It reuses the values already present in `.env` or values exported in your current shell.
+
 Use it carefully: it is intentionally destructive by default.
 
 ## Production Simulation Deployment

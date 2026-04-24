@@ -6,12 +6,10 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 ENV_EXAMPLE="${REPO_ROOT}/.env.example"
 ENV_TARGET="${REPO_ROOT}/.env"
+ENV_PREVIOUS=""
 
-# Defaults requested by user. You can override them per-run:
+# Secret values are never hard-coded in this repository. You can provide them per-run:
 #   EPA_AQS_EMAIL=... EPA_AQS_KEY=... AIRNOW_API_KEY=... bash scripts/12-update-local-env.sh
-EPA_AQS_EMAIL_VALUE="${EPA_AQS_EMAIL:-dz149@duke.edu}"
-EPA_AQS_KEY_VALUE="${EPA_AQS_KEY:-khakimallard86}"
-AIRNOW_API_KEY_VALUE="${AIRNOW_API_KEY:-79F62DB4-296F-4C97-A5DC-981BA08E34C5}"
 
 sync_secrets="${SYNC_K8S_SECRETS:-true}"
 restart_airflow="${RESTART_AIRFLOW_PODS:-true}"
@@ -27,8 +25,40 @@ if [[ ! -f "${ENV_EXAMPLE}" ]]; then
   exit 1
 fi
 
+get_env_file_value() {
+  local env_file="$1"
+  local key="$2"
+
+  if [[ -z "${env_file}" || ! -f "${env_file}" ]]; then
+    return 1
+  fi
+
+  local line
+  line="$(grep -m1 "^${key}=" "${env_file}" || true)"
+  if [[ -z "${line}" ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "${line#*=}"
+}
+
+resolve_secret_value() {
+  local key="$1"
+  local runtime_value="${!key:-}"
+
+  if [[ -n "${runtime_value}" ]]; then
+    printf '%s\n' "${runtime_value}"
+    return 0
+  fi
+
+  if [[ -n "${ENV_PREVIOUS}" ]]; then
+    get_env_file_value "${ENV_PREVIOUS}" "${key}" || true
+  fi
+}
+
 if [[ -f "${ENV_TARGET}" ]]; then
-  cp "${ENV_TARGET}" "${ENV_TARGET}.bak.$(date +%Y%m%d%H%M%S)"
+  ENV_PREVIOUS="${ENV_TARGET}.bak.$(date +%Y%m%d%H%M%S)"
+  cp "${ENV_TARGET}" "${ENV_PREVIOUS}"
 fi
 
 cp "${ENV_EXAMPLE}" "${ENV_TARGET}"
@@ -36,18 +66,38 @@ cp "${ENV_EXAMPLE}" "${ENV_TARGET}"
 set_env_value() {
   local key="$1"
   local value="$2"
+  local escaped_value
+  escaped_value="$(printf '%s' "${value}" | sed 's/[&|]/\\&/g')"
   if grep -q "^${key}=" "${ENV_TARGET}"; then
-    sed -i "s|^${key}=.*|${key}=${value}|" "${ENV_TARGET}"
+    sed -i "s|^${key}=.*|${key}=${escaped_value}|" "${ENV_TARGET}"
   else
     echo "${key}=${value}" >> "${ENV_TARGET}"
   fi
 }
 
-set_env_value "EPA_AQS_EMAIL" "${EPA_AQS_EMAIL_VALUE}"
-set_env_value "EPA_AQS_KEY" "${EPA_AQS_KEY_VALUE}"
-set_env_value "AIRNOW_API_KEY" "${AIRNOW_API_KEY_VALUE}"
+EPA_AQS_EMAIL_VALUE="$(resolve_secret_value "EPA_AQS_EMAIL")"
+EPA_AQS_KEY_VALUE="$(resolve_secret_value "EPA_AQS_KEY")"
+AIRNOW_API_KEY_VALUE="$(resolve_secret_value "AIRNOW_API_KEY")"
 
-echo "[1/7] .env regenerated from .env.example and key values updated."
+if [[ -n "${EPA_AQS_EMAIL_VALUE}" ]]; then
+  set_env_value "EPA_AQS_EMAIL" "${EPA_AQS_EMAIL_VALUE}"
+fi
+
+if [[ -n "${EPA_AQS_KEY_VALUE}" ]]; then
+  set_env_value "EPA_AQS_KEY" "${EPA_AQS_KEY_VALUE}"
+fi
+
+if [[ -n "${AIRNOW_API_KEY_VALUE}" ]]; then
+  set_env_value "AIRNOW_API_KEY" "${AIRNOW_API_KEY_VALUE}"
+fi
+
+if [[ -z "${EPA_AQS_EMAIL_VALUE}" || -z "${EPA_AQS_KEY_VALUE}" || -z "${AIRNOW_API_KEY_VALUE}" ]]; then
+  echo "Warning: one or more API credential values were not provided."
+  echo "         .env keeps the placeholder value from .env.example for any missing key."
+  echo "         Export EPA_AQS_EMAIL, EPA_AQS_KEY, and AIRNOW_API_KEY before rerunning if needed."
+fi
+
+echo "[1/7] .env regenerated from .env.example and secret values preserved when available."
 
 if [[ "${sync_secrets}" == "true" ]]; then
   echo "[2/7] Syncing Kubernetes secrets from .env ..."
