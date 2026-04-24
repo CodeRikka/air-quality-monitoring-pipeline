@@ -34,6 +34,10 @@ class LatestObservationPage(BaseModel):
 class MapLatestPoint(BaseModel):
     natural_key: str
     location_id: str
+    state_code: str | None = None
+    county_code: str | None = None
+    site_name: str | None = None
+    city_name: str | None = None
     latitude: float
     longitude: float
     pollutant_code: str
@@ -41,8 +45,10 @@ class MapLatestPoint(BaseModel):
     value_numeric: float
     unit: str
     timestamp_start_utc: datetime
+    data_granularity: str
     data_status: str
     source_system: str
+    source_dataset: str | None = None
     is_exceedance: bool | None = None
 
 

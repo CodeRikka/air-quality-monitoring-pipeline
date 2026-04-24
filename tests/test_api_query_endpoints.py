@@ -71,6 +71,10 @@ class ApiQueryEndpointTests(unittest.TestCase):
             {
                 "natural_key": "k2",
                 "location_id": "airnow:123456789",
+                "state_code": "06",
+                "county_code": "075",
+                "site_name": "Downtown",
+                "city_name": "San Francisco",
                 "latitude": 34.05,
                 "longitude": -118.25,
                 "pollutant_code": "44201",
@@ -78,8 +82,10 @@ class ApiQueryEndpointTests(unittest.TestCase):
                 "value_numeric": 0.05,
                 "unit": "ppm",
                 "timestamp_start_utc": "2026-04-17T01:00:00Z",
+                "data_granularity": "hourly",
                 "data_status": "provisional",
                 "source_system": "AIRNOW",
+                "source_dataset": "airnow_hourly_file",
                 "is_exceedance": False,
             }
         ]

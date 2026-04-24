@@ -41,16 +41,7 @@ def fetch_page(path: str, params: dict[str, Any]) -> dict[str, Any]:
         return {"items": [], "count": 0}
 
 
-st.sidebar.header("Filters")
-state_code = st.sidebar.text_input("Region: state_code", value="").strip().upper()
-county_code = st.sidebar.text_input("Region: county_code", value="").strip()
-pollutant_code = st.sidebar.text_input("Pollutant code", value="").strip()
-time_window_days = st.sidebar.selectbox("Time window (days)", options=[1, 3, 7, 14, 30, 90], index=4)
-
 now_utc = datetime.now(timezone.utc)
-window_start = now_utc - timedelta(days=int(time_window_days))
-start_iso = _to_iso(window_start)
-end_iso = _to_iso(now_utc)
 
 with st.expander("API health checks", expanded=False):
     col1, col2 = st.columns(2)
@@ -63,7 +54,7 @@ with st.expander("API health checks", expanded=False):
 
 tab_map, tab_station, tab_region, tab_quality = st.tabs(
     [
-        "Latest Daily Map",
+        "Latest Source Map",
         "Station Daily Time Series",
         "Regional Trend",
         "Data Completeness",
@@ -71,13 +62,38 @@ tab_map, tab_station, tab_region, tab_quality = st.tabs(
 )
 
 with tab_map:
-    st.subheader("Latest Daily Map")
-    st.caption("Shows the most recent daily observation for each station and pollutant.")
+    st.subheader("Latest Source Map")
+    st.caption("Shows the latest station observation by selected source system and granularity.")
+    map_col1, map_col2 = st.columns(2)
+    with map_col1:
+        map_source_mode = st.selectbox(
+            "Source view",
+            options=["AQS", "AIRNOW", "AQS & AIRNOW"],
+            index=2,
+            key="map_source_mode",
+        )
+        map_state_code = st.text_input("Map state_code", value="", key="map_state_code").strip().upper()
+    with map_col2:
+        map_granularities = st.multiselect(
+            "Granularity",
+            options=["daily", "hourly", "sample"],
+            default=["daily", "hourly"],
+            key="map_granularities",
+        )
+        map_pollutant_code = st.text_input("Map pollutant code", value="", key="map_pollutant_code").strip()
+
+    map_source_systems = {
+        "AQS": "AQS",
+        "AIRNOW": "AIRNOW",
+        "AQS & AIRNOW": "AQS,AIRNOW",
+    }[map_source_mode]
     map_payload = fetch_page(
         "/map/latest",
         {
-            "state_code": state_code or None,
-            "pollutant_code": pollutant_code or None,
+            "state_code": map_state_code or None,
+            "pollutant_code": map_pollutant_code or None,
+            "source_systems": map_source_systems,
+            "data_granularities": ",".join(map_granularities) if map_granularities else None,
             "limit": 2000,
             "offset": 0,
         },
@@ -86,16 +102,24 @@ with tab_map:
     map_df = pd.DataFrame(map_items)
     st.caption(f"Records: {len(map_df)}")
     if not map_df.empty:
-        if "is_exceedance" in map_df.columns:
+        metric_col1, metric_col2 = st.columns(2)
+        with metric_col1:
             st.metric("Exceedance points", int(map_df["is_exceedance"].fillna(False).sum()))
+        with metric_col2:
+            st.metric(
+                "Sources shown",
+                ", ".join(sorted(map_df["source_system"].dropna().astype(str).unique())),
+            )
         st.dataframe(
             map_df[
                 [
                     "location_id",
+                    "state_code",
                     "pollutant_code",
                     "value_numeric",
                     "unit",
                     "timestamp_start_utc",
+                    "data_granularity",
                     "data_status",
                     "source_system",
                 ]
@@ -109,11 +133,25 @@ with tab_map:
 
 with tab_station:
     st.subheader("Single-Station Daily Time Series")
-    station_location_id = st.text_input("Location ID", value="", placeholder="aqs:06:075:0010:1")
+    station_window_days = st.selectbox(
+        "Time window (days)",
+        options=[1, 3, 7, 14, 30, 90],
+        index=4,
+        key="station_window_days",
+    )
+    station_start_iso = _to_iso(now_utc - timedelta(days=int(station_window_days)))
+    station_end_iso = _to_iso(now_utc)
+    station_location_id = st.text_input(
+        "Location ID",
+        value="",
+        placeholder="aqs:06:075:0010:1",
+        key="station_location_id",
+    )
     station_pollutant_code = st.text_input(
         "Station pollutant code",
-        value=pollutant_code,
+        value="",
         placeholder="88101",
+        key="station_pollutant_code",
     ).strip()
     if station_location_id and station_pollutant_code:
         ts_payload = fetch_page(
@@ -121,8 +159,8 @@ with tab_station:
             {
                 "location_id": station_location_id.strip(),
                 "pollutant_code": station_pollutant_code,
-                "start_day_utc": start_iso,
-                "end_day_utc": end_iso,
+                "start_day_utc": station_start_iso,
+                "end_day_utc": station_end_iso,
                 "limit": 1000,
                 "offset": 0,
             },
@@ -140,14 +178,28 @@ with tab_station:
 
 with tab_region:
     st.subheader("Regional Trend")
+    region_col1, region_col2 = st.columns(2)
+    with region_col1:
+        region_state_code = st.text_input("Region state_code", value="", key="region_state_code").strip().upper()
+        region_pollutant_code = st.text_input("Region pollutant code", value="", key="region_pollutant_code").strip()
+    with region_col2:
+        region_county_code = st.text_input("Region county_code", value="", key="region_county_code").strip()
+        region_window_days = st.selectbox(
+            "Time window (days)",
+            options=[1, 3, 7, 14, 30, 90],
+            index=4,
+            key="region_window_days",
+        )
+    region_start_iso = _to_iso(now_utc - timedelta(days=int(region_window_days)))
+    region_end_iso = _to_iso(now_utc)
     region_payload = fetch_page(
         "/quality/coverage",
         {
-            "state_code": state_code or None,
-            "county_code": county_code or None,
-            "pollutant_code": pollutant_code or None,
-            "start_day_utc": start_iso,
-            "end_day_utc": end_iso,
+            "state_code": region_state_code or None,
+            "county_code": region_county_code or None,
+            "pollutant_code": region_pollutant_code or None,
+            "start_day_utc": region_start_iso,
+            "end_day_utc": region_end_iso,
             "limit": 2000,
             "offset": 0,
         },
@@ -171,15 +223,29 @@ with tab_region:
 
 with tab_quality:
     st.subheader("Data Completeness")
+    quality_col1, quality_col2 = st.columns(2)
+    with quality_col1:
+        quality_state_code = st.text_input("Quality state_code", value="", key="quality_state_code").strip().upper()
+        quality_pollutant_code = st.text_input("Quality pollutant code", value="", key="quality_pollutant_code").strip()
+    with quality_col2:
+        quality_county_code = st.text_input("Quality county_code", value="", key="quality_county_code").strip()
+        quality_window_days = st.selectbox(
+            "Time window (days)",
+            options=[1, 3, 7, 14, 30, 90],
+            index=4,
+            key="quality_window_days",
+        )
+    quality_start_iso = _to_iso(now_utc - timedelta(days=int(quality_window_days)))
+    quality_end_iso = _to_iso(now_utc)
     min_coverage_ratio = st.slider("Minimum coverage ratio", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
     quality_payload = fetch_page(
         "/quality/coverage",
         {
-            "state_code": state_code or None,
-            "county_code": county_code or None,
-            "pollutant_code": pollutant_code or None,
-            "start_day_utc": start_iso,
-            "end_day_utc": end_iso,
+            "state_code": quality_state_code or None,
+            "county_code": quality_county_code or None,
+            "pollutant_code": quality_pollutant_code or None,
+            "start_day_utc": quality_start_iso,
+            "end_day_utc": quality_end_iso,
             "min_coverage_ratio": min_coverage_ratio,
             "limit": 2000,
             "offset": 0,
